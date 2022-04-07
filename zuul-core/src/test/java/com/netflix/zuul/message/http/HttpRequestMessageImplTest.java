@@ -17,6 +17,7 @@
 package com.netflix.zuul.message.http;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.spy;
@@ -24,16 +25,21 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.google.common.net.InetAddresses;
+import com.netflix.zuul.context.CommonContextKeys;
 import com.netflix.zuul.context.SessionContext;
 import com.netflix.zuul.message.Headers;
 import io.netty.channel.local.LocalAddress;
+
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.URISyntaxException;
 import java.util.Optional;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.junit.MockitoJUnitRunner;
 
 @RunWith(MockitoJUnitRunner.class)
 public class HttpRequestMessageImplTest {
@@ -199,6 +205,38 @@ public class HttpRequestMessageImplTest {
                 "192.168.0.2", "https", 7002, "localhost");
         Assert.assertEquals("blah.netflix.com", request.getOriginalHost());
 
+        queryParams = new HttpQueryParams();
+        headers = new Headers();
+        headers.add("Host", "0.0.0.1");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals("0.0.0.1", request.getOriginalHost());
+
+        queryParams = new HttpQueryParams();
+        headers = new Headers();
+        headers.add("Host", "0.0.0.1:2");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals("0.0.0.1", request.getOriginalHost());
+
+        queryParams = new HttpQueryParams();
+        headers = new Headers();
+        headers.add("Host", "[::2]");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals("[::2]", request.getOriginalHost());
+
+        queryParams = new HttpQueryParams();
+        headers = new Headers();
+        headers.add("Host", "[::2]:3");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals("[::2]", request.getOriginalHost());
+
         headers = new Headers();
         headers.add("Host", "blah.netflix.com");
         headers.add("X-Forwarded-Host", "foo.netflix.com");
@@ -220,6 +258,18 @@ public class HttpRequestMessageImplTest {
                 headers,
                 "192.168.0.2", "https", 7002, "localhost");
         Assert.assertEquals("blah.netflix.com", request.getOriginalHost());
+    }
+
+    @Test
+    public void getOriginalHost_failsOnUnbracketedIpv6Address() {
+        HttpQueryParams queryParams = new HttpQueryParams();
+        Headers headers = new Headers();
+        headers.add("Host", "ba::dd");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+
+        assertThrows(URISyntaxException.class, () -> HttpRequestMessageImpl.getOriginalHost(headers, "server"));
     }
 
     @Test
@@ -247,12 +297,67 @@ public class HttpRequestMessageImplTest {
         Assert.assertEquals(443, request.getOriginalPort());
 
         headers = new Headers();
+        headers.add("Host", "127.0.0.2:443");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals(443, request.getOriginalPort());
+
+        headers = new Headers();
+        headers.add("Host", "127.0.0.2");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals(7002, request.getOriginalPort());
+
+        headers = new Headers();
+        headers.add("Host", "[::2]:443");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals(443, request.getOriginalPort());
+
+        headers = new Headers();
+        headers.add("Host", "[::2]");
+        request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
+                headers,
+                "192.168.0.2", "https", 7002, "localhost");
+        Assert.assertEquals(7002, request.getOriginalPort());
+
+        headers = new Headers();
         headers.add("Host", "blah.netflix.com:443");
         headers.add("X-Forwarded-Port", "7005");
         request = new HttpRequestMessageImpl(new SessionContext(), "HTTP/1.1", "POST", "/some/where", queryParams,
                 headers,
                 "192.168.0.2", "https", 7002, "localhost");
         Assert.assertEquals(7005, request.getOriginalPort());
+    }
+
+    @Test
+    public void getOriginalPort_fallsBackOnUnbracketedIpv6Address() throws URISyntaxException {
+        Headers headers = new Headers();
+        headers.add("Host", "ba::33");
+
+        assertEquals(9999, HttpRequestMessageImpl.getOriginalPort(new SessionContext(), headers, 9999));
+    }
+
+    @Test
+    public void getOriginalPort_EmptyXFFPort() throws URISyntaxException {
+        Headers headers = new Headers();
+        headers.add(HttpHeaderNames.X_FORWARDED_PORT, "");
+
+        // Default to using server port
+        assertEquals(9999, HttpRequestMessageImpl.getOriginalPort(new SessionContext(), headers, 9999));
+    }
+
+    @Test
+    public void getOriginalPort_respectsProxyProtocol() throws URISyntaxException {
+        SessionContext context = new SessionContext();
+        context.set(CommonContextKeys.PROXY_PROTOCOL_DESTINATION_ADDRESS,
+                new InetSocketAddress(InetAddresses.forString("1.1.1.1"), 443));
+        Headers headers = new Headers();
+        headers.add("X-Forwarded-Port", "6000");
+        assertEquals(443, HttpRequestMessageImpl.getOriginalPort(context, headers, 9999));
     }
 
     @Test

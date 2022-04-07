@@ -16,8 +16,8 @@
 
 package com.netflix.zuul.sample;
 
+import com.google.inject.Guice;
 import com.google.inject.Injector;
-import com.netflix.governator.InjectorBuilder;
 import com.netflix.zuul.netty.server.BaseServerStartup;
 import com.netflix.zuul.netty.server.Server;
 
@@ -41,14 +41,15 @@ public class Bootstrap {
         Server server = null;
 
         try {
-            Injector injector = InjectorBuilder.fromModule(new ZuulSampleModule()).createInjector();
+            Injector injector = Guice.createInjector(new ZuulSampleModule());
             BaseServerStartup serverStartup = injector.getInstance(BaseServerStartup.class);
             server = serverStartup.server();
 
             long startupDuration = System.currentTimeMillis() - startTime;
             System.out.println("Zuul Sample: finished startup. Duration = " + startupDuration + " ms");
 
-            server.start(true);
+            server.start();
+            server.awaitTermination();
         }
         catch (Throwable t) {
             t.printStackTrace();
