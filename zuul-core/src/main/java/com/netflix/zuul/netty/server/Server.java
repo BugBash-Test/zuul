@@ -436,6 +436,7 @@ public class Server
             } catch (IllegalStateException e) {
                 // This can happen if the VM is already shutting down
                 LOG.debug("Failed to remove shutdown hook", e);
+                throw e;
             }
 
             stopped = true;
